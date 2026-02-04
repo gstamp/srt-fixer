@@ -104,6 +104,7 @@ function usage() {
     "  srt-fixer --in input.srt [--out output.srt] [--clean] [--ignore-existing] [--keep-default] [--keep-white]",
     "  srt-fixer input.srt [output.srt] [--clean] [--ignore-existing] [--keep-default] [--keep-white]",
     "  srt-fixer [--in-place | --out-dir dir | --suffix .fixed] input1.srt [input2.srt ...]",
+    "  srt-fixer *.ass",
     "",
     "Options:",
     "  --clean            Remove existing {\\anX} tags before processing.",
@@ -116,12 +117,19 @@ function usage() {
     "  --suffix text      Write outputs next to inputs, inserting the suffix before .srt.",
     "  -h, --help         Show this help message.",
     "",
+    "Notes:",
+    "  - Multiple .ass inputs write .srt files next to each input by default.",
+    "  - --in-place is not valid for .ass inputs.",
+    "  - Mixed .ass and .srt batches are not supported.",
+    "",
     "Examples:",
     "  srt-fixer --in input.srt --out output.srt",
     "  srt-fixer input.srt --clean --keep-default",
     "  srt-fixer --in-place input1.srt input2.srt",
     "  srt-fixer --in-place *.srt",
     "  srt-fixer --out-dir fixed/ input1.srt input2.srt",
+    "  srt-fixer *.ass",
+    "  srt-fixer --out-dir srt_out *.ass",
   ].join("\n");
 }
 
@@ -566,17 +574,35 @@ async function main() {
   }
 
   const usesBatchFlags = args.inPlace || Boolean(args.outDir) || Boolean(args.suffix);
+  const normalizedInputs = args.inputs.map((input) => input.toLowerCase());
+  const allAssExt = normalizedInputs.every((input) => input.endsWith(".ass"));
+  const hasAssExt = normalizedInputs.some((input) => input.endsWith(".ass"));
+  const hasNonAssExt = normalizedInputs.some((input) => !input.endsWith(".ass"));
+  const defaultAssBatch = !usesBatchFlags && !args.output && args.inputs.length > 1 && allAssExt;
+
+  if (args.inputs.length > 1 && hasAssExt && hasNonAssExt) {
+    console.error("Mixed .ass and .srt inputs are not supported in one batch.");
+    process.exit(1);
+  }
+  if (args.inPlace && hasAssExt) {
+    console.error("`--in-place` is not valid for .ass inputs. Use `--out-dir` or default .srt outputs.");
+    process.exit(1);
+  }
   if (args.output && (args.inputs.length !== 1 || usesBatchFlags)) {
     console.error("`--out` can only be used with a single input and no batch flags.");
     process.exit(1);
   }
   if (!usesBatchFlags && !args.output && args.inputs.length > 2) {
-    console.error("Multiple inputs require --in-place, --out-dir, or --suffix.");
-    process.exit(1);
+    if (!allAssExt) {
+      console.error("Multiple inputs require --in-place, --out-dir, or --suffix.");
+      process.exit(1);
+    }
   }
   if (!usesBatchFlags && !args.output && args.inputs.length === 2) {
-    args.output = args.inputs[1];
-    args.inputs = [args.inputs[0]];
+    if (!allAssExt) {
+      args.output = args.inputs[1];
+      args.inputs = [args.inputs[0]];
+    }
   }
 
   let failures = 0;
@@ -613,6 +639,11 @@ async function main() {
       } else if (args.suffix) {
         const { dir, file } = splitDirAndFile(inputPath);
         const filename = applySuffix(replaceExtWithSrt(file), args.suffix);
+        const target = `${dir}/${filename}`;
+        await Bun.write(target, output + "\n");
+      } else if (defaultAssBatch && isAss) {
+        const { dir, file } = splitDirAndFile(inputPath);
+        const filename = replaceExtWithSrt(file);
         const target = `${dir}/${filename}`;
         await Bun.write(target, output + "\n");
       } else if (args.output) {

@@ -29,15 +29,27 @@ srt-fixer --out-dir fixed subtitles/*.srt
 ```bash
 srt-fixer --suffix .fixed subtitles/*.srt
 ```
+- Convert a whole folder of ASS files to SRT next to each input (default for multiple `.ass`):
+```bash
+srt-fixer subtitles/*.ass
+```
+- Convert a whole folder of ASS files into a new directory:
+```bash
+srt-fixer --out-dir srt_out subtitles/*.ass
+```
 
 **CLI Usage**
 ```bash
 srt-fixer --in input.srt [--out output.srt] [--clean] [--ignore-existing] [--keep-default] [--keep-white]
 srt-fixer input.srt [output.srt] [--clean] [--ignore-existing] [--keep-default] [--keep-white]
 srt-fixer [--in-place | --out-dir dir | --suffix .fixed] input1.srt [input2.srt ...]
+srt-fixer *.ass
 ```
 
 If the input is `.ass`, the tool converts it to SRT and preserves common style hints as HTML `<font>` tags plus leading `{\anX}` alignment tags.
+For multiple `.ass` inputs, outputs are written next to each input by default.
+Mixed `.ass` and `.srt` batches are not supported.
+`--in-place` is not valid for `.ass` inputs.
 
 **Options**
 - `--clean` Remove existing `{\anX}` tags before processing.
