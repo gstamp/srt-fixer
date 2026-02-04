@@ -29,8 +29,11 @@ const DEFAULT_TAG = "\\an2";
 
 function parseArgs(argv: string[]) {
   const args = argv.slice(2);
-  let input: string | undefined;
+  const inputs: string[] = [];
   let output: string | undefined;
+  let outDir: string | undefined;
+  let suffix: string | undefined;
+  let inPlace = false;
   let clean = false;
   let ignoreExisting = false;
   let omitDefault = true;
@@ -63,8 +66,22 @@ function parseArgs(argv: string[]) {
       keepWhite = true;
       continue;
     }
+    if (arg === "--in-place") {
+      inPlace = true;
+      continue;
+    }
+    if (arg === "--out-dir" && i + 1 < args.length) {
+      outDir = args[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg === "--suffix" && i + 1 < args.length) {
+      suffix = args[i + 1];
+      i += 1;
+      continue;
+    }
     if (arg === "--in" && i + 1 < args.length) {
-      input = args[i + 1];
+      inputs.push(args[i + 1]);
       i += 1;
       continue;
     }
@@ -73,17 +90,10 @@ function parseArgs(argv: string[]) {
       i += 1;
       continue;
     }
-    if (!input) {
-      input = arg;
-      continue;
-    }
-    if (!output) {
-      output = arg;
-      continue;
-    }
+    inputs.push(arg);
   }
 
-  return { input, output, clean, ignoreExisting, omitDefault, keepWhite, help };
+  return { inputs, output, outDir, suffix, inPlace, clean, ignoreExisting, omitDefault, keepWhite, help };
 }
 
 function usage() {
@@ -93,6 +103,7 @@ function usage() {
     "Usage:",
     "  srt-fixer --in input.srt [--out output.srt] [--clean] [--ignore-existing] [--keep-default] [--keep-white]",
     "  srt-fixer input.srt [output.srt] [--clean] [--ignore-existing] [--keep-default] [--keep-white]",
+    "  srt-fixer [--in-place | --out-dir dir | --suffix .fixed] input1.srt [input2.srt ...]",
     "",
     "Options:",
     "  --clean            Remove existing {\\anX} tags before processing.",
@@ -100,6 +111,9 @@ function usage() {
     "  --omit-default     Do not add {\\an2} when it is the assigned tag (default).",
     "  --keep-default     Always add {\\an2} when it is the assigned tag.",
     "  --keep-white       Preserve #ffffff color tags when converting from ASS.",
+    "  --in-place         Overwrite each input file in place.",
+    "  --out-dir dir      Write outputs into the given directory (batch-friendly).",
+    "  --suffix text      Write outputs next to inputs, inserting the suffix before .srt.",
     "  -h, --help         Show this help message.",
   ].join("\n");
 }
@@ -517,40 +531,103 @@ function serializeSrt(blocks: SubtitleBlock[]): string {
     .join("\n\n");
 }
 
+function splitDirAndFile(path: string): { dir: string; file: string } {
+  const normalized = path.replace(/\\/g, "/");
+  const slash = normalized.lastIndexOf("/");
+  if (slash === -1) return { dir: ".", file: normalized };
+  return { dir: normalized.slice(0, slash), file: normalized.slice(slash + 1) };
+}
+
+function replaceExtWithSrt(filename: string): string {
+  const dot = filename.lastIndexOf(".");
+  if (dot === -1) return `${filename}.srt`;
+  return `${filename.slice(0, dot)}.srt`;
+}
+
+function applySuffix(filename: string, suffix: string | undefined): string {
+  if (!suffix) return filename;
+  const dot = filename.lastIndexOf(".");
+  if (dot === -1) return `${filename}${suffix}`;
+  return `${filename.slice(0, dot)}${suffix}${filename.slice(dot)}`;
+}
+
 async function main() {
   const args = parseArgs(process.argv);
-  if (args.help || !args.input) {
+  if (args.help || args.inputs.length === 0) {
     console.log(usage());
     process.exit(args.help ? 0 : 1);
   }
 
-  const inputText = await Bun.file(args.input).text();
-  const isAss = detectAssFormat(args.input, inputText);
-  const { blocks, skippedBlocks } = isAss
-    ? parseAss(inputText, { omitWhiteColor: !args.keepWhite })
-    : parseSrt(inputText);
-
-  if (blocks.length === 0) {
-    console.error(isAss ? "No valid ASS dialogue blocks found." : "No valid subtitle blocks found.");
+  const usesBatchFlags = args.inPlace || Boolean(args.outDir) || Boolean(args.suffix);
+  if (args.output && (args.inputs.length !== 1 || usesBatchFlags)) {
+    console.error("`--out` can only be used with a single input and no batch flags.");
     process.exit(1);
   }
-
-  assignSlots(blocks, {
-    clean: args.clean,
-    ignoreExisting: args.ignoreExisting,
-    omitDefault: args.omitDefault,
-  });
-
-  const output = serializeSrt(blocks);
-
-  if (args.output) {
-    await Bun.write(args.output, output + "\n");
-  } else {
-    console.log(output);
+  if (!usesBatchFlags && !args.output && args.inputs.length > 2) {
+    console.error("Multiple inputs require --in-place, --out-dir, or --suffix.");
+    process.exit(1);
+  }
+  if (!usesBatchFlags && !args.output && args.inputs.length === 2) {
+    args.output = args.inputs[1];
+    args.inputs = [args.inputs[0]];
   }
 
-  if (skippedBlocks > 0) {
-    console.error(`Skipped ${skippedBlocks} empty or malformed block(s).`);
+  let failures = 0;
+  let totalSkipped = 0;
+
+  for (const inputPath of args.inputs) {
+    try {
+      const inputText = await Bun.file(inputPath).text();
+      const isAss = detectAssFormat(inputPath, inputText);
+      const { blocks, skippedBlocks } = isAss
+        ? parseAss(inputText, { omitWhiteColor: !args.keepWhite })
+        : parseSrt(inputText);
+
+      if (blocks.length === 0) {
+        console.error(isAss ? "No valid ASS dialogue blocks found." : "No valid subtitle blocks found.");
+        process.exit(1);
+      }
+
+      assignSlots(blocks, {
+        clean: args.clean,
+        ignoreExisting: args.ignoreExisting,
+        omitDefault: args.omitDefault,
+      });
+
+      const output = serializeSrt(blocks);
+
+      if (args.inPlace) {
+        await Bun.write(inputPath, output + "\n");
+      } else if (args.outDir) {
+        const { file } = splitDirAndFile(inputPath);
+        const filename = replaceExtWithSrt(file);
+        const target = `${args.outDir.replace(/\/$/, "")}/${filename}`;
+        await Bun.write(target, output + "\n");
+      } else if (args.suffix) {
+        const { dir, file } = splitDirAndFile(inputPath);
+        const filename = applySuffix(replaceExtWithSrt(file), args.suffix);
+        const target = `${dir}/${filename}`;
+        await Bun.write(target, output + "\n");
+      } else if (args.output) {
+        await Bun.write(args.output, output + "\n");
+      } else {
+        console.log(output);
+      }
+
+      totalSkipped += skippedBlocks;
+    } catch (error) {
+      failures += 1;
+      console.error(
+        error instanceof Error ? `${inputPath}: ${error.message}` : `${inputPath}: ${String(error)}`,
+      );
+    }
+  }
+
+  if (totalSkipped > 0) {
+    console.error(`Skipped ${totalSkipped} empty or malformed block(s).`);
+  }
+  if (failures > 0) {
+    process.exit(1);
   }
 }
 
