@@ -115,6 +115,13 @@ function usage() {
     "  --out-dir dir      Write outputs into the given directory (batch-friendly).",
     "  --suffix text      Write outputs next to inputs, inserting the suffix before .srt.",
     "  -h, --help         Show this help message.",
+    "",
+    "Examples:",
+    "  srt-fixer --in input.srt --out output.srt",
+    "  srt-fixer input.srt --clean --keep-default",
+    "  srt-fixer --in-place input1.srt input2.srt",
+    "  srt-fixer --in-place *.srt",
+    "  srt-fixer --out-dir fixed/ input1.srt input2.srt",
   ].join("\n");
 }
 
