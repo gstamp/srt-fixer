@@ -10,8 +10,8 @@ bun run index.ts -- input.srt output.srt
 
 **CLI Usage**
 ```bash
-srt-fixer --in input.srt [--out output.srt] [--clean] [--ignore-existing] [--omit-default]
-srt-fixer input.srt [output.srt] [--clean] [--ignore-existing] [--omit-default]
+srt-fixer --in input.srt [--out output.srt] [--clean] [--ignore-existing] [--keep-default] [--keep-white]
+srt-fixer input.srt [output.srt] [--clean] [--ignore-existing] [--keep-default] [--keep-white]
 ```
 
 If the input is `.ass`, the tool converts it to SRT and preserves common style hints as HTML `<font>` tags plus leading `{\anX}` alignment tags.
@@ -19,7 +19,9 @@ If the input is `.ass`, the tool converts it to SRT and preserves common style h
 **Options**
 - `--clean` Remove existing `{\anX}` tags before processing.
 - `--ignore-existing` Keep existing leading `{\anX}` tags and reserve their slots.
-- `--omit-default` Do not add `{\an2}` when it is the assigned tag.
+- `--omit-default` Do not add `{\an2}` when it is the assigned tag (default).
+- `--keep-default` Always add `{\an2}` when it is the assigned tag.
+- `--keep-white` Preserve `#ffffff` color tags when converting from ASS.
 
 **Build An Executable**
 ```bash

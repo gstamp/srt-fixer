@@ -33,7 +33,8 @@ function parseArgs(argv: string[]) {
   let output: string | undefined;
   let clean = false;
   let ignoreExisting = false;
-  let omitDefault = false;
+  let omitDefault = true;
+  let keepWhite = false;
   let help = false;
 
   for (let i = 0; i < args.length; i += 1) {
@@ -52,6 +53,14 @@ function parseArgs(argv: string[]) {
     }
     if (arg === "--omit-default") {
       omitDefault = true;
+      continue;
+    }
+    if (arg === "--keep-default") {
+      omitDefault = false;
+      continue;
+    }
+    if (arg === "--keep-white") {
+      keepWhite = true;
       continue;
     }
     if (arg === "--in" && i + 1 < args.length) {
@@ -74,7 +83,7 @@ function parseArgs(argv: string[]) {
     }
   }
 
-  return { input, output, clean, ignoreExisting, omitDefault, help };
+  return { input, output, clean, ignoreExisting, omitDefault, keepWhite, help };
 }
 
 function usage() {
@@ -82,13 +91,15 @@ function usage() {
     "srt-fixer",
     "",
     "Usage:",
-    "  srt-fixer --in input.srt [--out output.srt] [--clean] [--ignore-existing] [--omit-default]",
-    "  srt-fixer input.srt [output.srt] [--clean] [--ignore-existing] [--omit-default]",
+    "  srt-fixer --in input.srt [--out output.srt] [--clean] [--ignore-existing] [--keep-default] [--keep-white]",
+    "  srt-fixer input.srt [output.srt] [--clean] [--ignore-existing] [--keep-default] [--keep-white]",
     "",
     "Options:",
     "  --clean            Remove existing {\\anX} tags before processing.",
     "  --ignore-existing  Keep existing leading {\\anX} tags and reserve their slots.",
-    "  --omit-default     Do not add {\\an2} when it is the assigned tag.",
+    "  --omit-default     Do not add {\\an2} when it is the assigned tag (default).",
+    "  --keep-default     Always add {\\an2} when it is the assigned tag.",
+    "  --keep-white       Preserve #ffffff color tags when converting from ASS.",
     "  -h, --help         Show this help message.",
   ].join("\n");
 }
@@ -256,21 +267,28 @@ function parseAssOverrides(text: string) {
   };
 }
 
-function wrapWithFonts(text: string, fontName?: string, fontSize?: string, color?: string): string {
-  let output = text;
-  if (color) {
-    output = `<font color="${color}">${output}</font>`;
-  }
-  if (fontSize) {
-    output = `<font size="${fontSize}">${output}</font>`;
-  }
-  if (fontName) {
-    output = `<font face="${fontName}">${output}</font>`;
-  }
-  return output;
+function escapeHtmlAttr(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
-function parseAss(content: string): ParseResult {
+function wrapWithFonts(text: string, fontName?: string, fontSize?: string, color?: string): string {
+  if (!fontName && !fontSize && !color) return text;
+  const attrs: string[] = [];
+  if (fontName) attrs.push(`face="${escapeHtmlAttr(fontName)}"`);
+  if (fontSize) attrs.push(`size="${escapeHtmlAttr(fontSize)}"`);
+  if (color) attrs.push(`color="${escapeHtmlAttr(color)}"`);
+  return `<font ${attrs.join(" ")}>${text}</font>`;
+}
+
+type AssParseOptions = {
+  omitWhiteColor: boolean;
+};
+
+function parseAss(content: string, options: AssParseOptions): ParseResult {
   const normalized = content.replace(/\r\n/g, "\n");
   const lines = normalized.split("\n");
   const blocks: SubtitleBlock[] = [];
@@ -321,7 +339,11 @@ function parseAss(content: string): ParseResult {
     const override = parseAssOverrides(values.Text ?? "");
     const fontName = override.fontName ?? style.Fontname;
     const fontSize = override.fontSize ?? style.Fontsize;
-    const color = override.color ?? assColorToHex(style.PrimaryColour);
+    const colorFromOverride = override.color !== undefined;
+    let color = override.color ?? assColorToHex(style.PrimaryColour);
+    if (!colorFromOverride && options.omitWhiteColor && color?.toLowerCase() === "#ffffff") {
+      color = undefined;
+    }
     const align = override.align;
 
     let text = override.cleaned.replace(/\\N/g, "\n").replace(/\\n/g, "\n");
@@ -482,7 +504,11 @@ function assignSlots(blocks: SubtitleBlock[], options: AssignOptions) {
 }
 
 function serializeSrt(blocks: SubtitleBlock[]): string {
-  const ordered = [...blocks].sort((a, b) => a.originalOrder - b.originalOrder);
+  const ordered = [...blocks].sort((a, b) => {
+    if (a.startMs !== b.startMs) return a.startMs - b.startMs;
+    if (a.endMs !== b.endMs) return a.endMs - b.endMs;
+    return a.originalOrder - b.originalOrder;
+  });
   return ordered
     .map((block, idx) => {
       const index = block.index ?? idx + 1;
@@ -500,7 +526,9 @@ async function main() {
 
   const inputText = await Bun.file(args.input).text();
   const isAss = detectAssFormat(args.input, inputText);
-  const { blocks, skippedBlocks } = isAss ? parseAss(inputText) : parseSrt(inputText);
+  const { blocks, skippedBlocks } = isAss
+    ? parseAss(inputText, { omitWhiteColor: !args.keepWhite })
+    : parseSrt(inputText);
 
   if (blocks.length === 0) {
     console.error(isAss ? "No valid ASS dialogue blocks found." : "No valid subtitle blocks found.");
